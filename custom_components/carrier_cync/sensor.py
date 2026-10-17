@@ -22,7 +22,7 @@ from .const import (
     KEY_OUTDOOR_HUMI_UNIT,
     KEY_OUTDOOR_TEMP_UNIT,
     KEY_ROOM_HUMIDITY,
-    KEY_ROOM_TEMP,
+    KEY_ROOM_TEMP_READ,
 )
 
 
@@ -35,59 +35,26 @@ async def async_setup_entry(
     coordinator = data["coordinator"]
     async_add_entities(
         [
+            CarrierRoomTempSensor(coordinator, entry),
             CarrierDtSensor(
-                coordinator,
-                entry,
-                "room_temp",
-                "실내온도",
-                KEY_ROOM_TEMP,
-                UnitOfTemperature.CELSIUS,
-                SensorDeviceClass.TEMPERATURE,
-            ),
-            CarrierDtSensor(
-                coordinator,
-                entry,
-                "room_humidity",
-                "실내습도",
-                KEY_ROOM_HUMIDITY,
-                PERCENTAGE,
-                SensorDeviceClass.HUMIDITY,
+                coordinator, entry, "room_humidity", "실내습도",
+                KEY_ROOM_HUMIDITY, PERCENTAGE, SensorDeviceClass.HUMIDITY,
             ),
             CarrierWeatherSensor(
-                coordinator,
-                entry,
-                "outdoor_temp",
-                "실외온도",
-                "temperature",
-                UnitOfTemperature.CELSIUS,
-                SensorDeviceClass.TEMPERATURE,
+                coordinator, entry, "outdoor_temp", "실외온도",
+                "temperature", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
             ),
             CarrierWeatherSensor(
-                coordinator,
-                entry,
-                "outdoor_humidity",
-                "실외습도",
-                "humidity",
-                PERCENTAGE,
-                SensorDeviceClass.HUMIDITY,
+                coordinator, entry, "outdoor_humidity", "실외습도",
+                "humidity", PERCENTAGE, SensorDeviceClass.HUMIDITY,
             ),
             CarrierDtSensor(
-                coordinator,
-                entry,
-                "odu_temp",
-                "실외기온도",
-                KEY_OUTDOOR_TEMP_UNIT,
-                UnitOfTemperature.CELSIUS,
-                SensorDeviceClass.TEMPERATURE,
+                coordinator, entry, "odu_temp", "실외기온도",
+                KEY_OUTDOOR_TEMP_UNIT, UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
             ),
             CarrierDtSensor(
-                coordinator,
-                entry,
-                "odu_humidity",
-                "실외기습도",
-                KEY_OUTDOOR_HUMI_UNIT,
-                PERCENTAGE,
-                SensorDeviceClass.HUMIDITY,
+                coordinator, entry, "odu_humidity", "실외기습도",
+                KEY_OUTDOOR_HUMI_UNIT, PERCENTAGE, SensorDeviceClass.HUMIDITY,
             ),
         ]
     )
@@ -103,17 +70,37 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
     )
 
 
+class CarrierRoomTempSensor(CoordinatorEntity, SensorEntity):
+    """Indoor temp from 3A/10."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        device_id = entry.data[CONF_DEVICE_ID]
+        self._attr_name = "실내온도"
+        self._attr_unique_id = f"{device_id}_room_temp"
+        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def native_value(self):
+        dt = (self.coordinator.data or {}).get("dt") or {}
+        raw = dt.get(KEY_ROOM_TEMP_READ, dt.get("3A"))
+        if raw is None:
+            return None
+        try:
+            return round(float(raw) / 10.0, 1)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self):
+        return {"carrier_dt_key": "3A", "scale": "value/10"}
+
+
 class CarrierDtSensor(CoordinatorEntity, SensorEntity):
-    def __init__(
-        self,
-        coordinator,
-        entry: ConfigEntry,
-        key: str,
-        name: str,
-        dt_key: str,
-        unit: str,
-        device_class: SensorDeviceClass,
-    ) -> None:
+    def __init__(self, coordinator, entry, key, name, dt_key, unit, device_class) -> None:
         super().__init__(coordinator)
         device_id = entry.data[CONF_DEVICE_ID]
         self._dt_key = dt_key
@@ -135,22 +122,9 @@ class CarrierDtSensor(CoordinatorEntity, SensorEntity):
         except (TypeError, ValueError):
             return None
 
-    @property
-    def extra_state_attributes(self):
-        return {"carrier_dt_key": self._dt_key}
-
 
 class CarrierWeatherSensor(CoordinatorEntity, SensorEntity):
-    def __init__(
-        self,
-        coordinator,
-        entry: ConfigEntry,
-        key: str,
-        name: str,
-        weather_field: str,
-        unit: str,
-        device_class: SensorDeviceClass,
-    ) -> None:
+    def __init__(self, coordinator, entry, key, name, weather_field, unit, device_class) -> None:
         super().__init__(coordinator)
         device_id = entry.data[CONF_DEVICE_ID]
         self._field = weather_field
@@ -160,6 +134,11 @@ class CarrierWeatherSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_class = device_class
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_info = _device_info(entry)
+
+    @property
+    def available(self) -> bool:
+        weather = (self.coordinator.data or {}).get("weather") or {}
+        return self._field in weather and weather.get(self._field) is not None
 
     @property
     def native_value(self):

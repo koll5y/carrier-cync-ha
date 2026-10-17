@@ -84,7 +84,7 @@ class CarrierCyncApi:
         try:
             data["weather"] = await self.get_weather()
         except Exception as err:
-            _LOGGER.debug("Weather fetch failed: %s", err)
+            _LOGGER.warning("Weather fetch failed: %s", err)
             data["weather"] = {}
         return data
 

@@ -27,7 +27,8 @@ from .const import (
     KEY_MODE,
     KEY_POWER,
     KEY_ROOM_HUMIDITY,
-    KEY_ROOM_TEMP,
+    KEY_ROOM_TEMP_READ,
+    KEY_ROOM_TEMP_ALT,
     KEY_SET_TEMP_STATE,
     KEY_SET_TEMP_WRITE,
     MODE_COOL,
@@ -121,13 +122,13 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
-        """실내기 현재온도 (3E). 희망온도(3D)와 다른 키."""
+        """실내온도: 3A/10 (앱과 일치). 3E는 모드에 따라 희망온도를 따라감."""
         dt = self._dt()
-        raw = dt.get("3E", dt.get(KEY_ROOM_TEMP))
+        raw = dt.get(KEY_ROOM_TEMP_READ, dt.get("3A"))
         if raw is None:
             return None
         try:
-            return float(raw)
+            return round(float(raw) / 10.0, 1)
         except (TypeError, ValueError):
             return None
 
@@ -169,7 +170,8 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             "carrier_power_status": status,
             "carrier_2b_mode": self._int(KEY_MODE),
             "희망온도_3D": self._int(KEY_SET_TEMP_STATE),
-            "실내온도_3E": self._int(KEY_ROOM_TEMP),
+            "실내온도_3A_x10": self._int(KEY_ROOM_TEMP_READ),
+            "실내온도_3E_참고": self._int(KEY_ROOM_TEMP_ALT),
             "실내습도_3J": self._int(KEY_ROOM_HUMIDITY),
             "carrier_pmv": self._is_pmv(),
         }
