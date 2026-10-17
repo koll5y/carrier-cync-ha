@@ -121,34 +121,45 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
-        """Always indoor unit room temp (3E). Never outdoor / weather."""
+        """실내기 현재온도 (3E). 희망온도(3D)와 다른 키."""
         dt = self._dt()
-        if "3E" not in dt and KEY_ROOM_TEMP not in dt:
+        raw = dt.get("3E", dt.get(KEY_ROOM_TEMP))
+        if raw is None:
             return None
         try:
-            return float(dt.get(KEY_ROOM_TEMP, dt.get("3E")))
+            return float(raw)
         except (TypeError, ValueError):
             return None
 
-
     @property
     def current_humidity(self) -> int | None:
-        if KEY_ROOM_HUMIDITY not in self._dt():
+        """실내기 현재습도 (3J)."""
+        dt = self._dt()
+        raw = dt.get("3J", dt.get(KEY_ROOM_HUMIDITY))
+        if raw is None:
             return None
-        return self._int(KEY_ROOM_HUMIDITY, 0)
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
 
     @property
     def target_temperature(self) -> float | None:
-        # PMV일 때 3D는 온도가 아니라 단계 관련 값 → 온도 게이지에 쓰지 않음
+        """희망온도 (3D). PMV 모드에서는 단계값이라 숨김."""
         if self._is_pmv():
             return None
-        if KEY_SET_TEMP_STATE not in self._dt():
+        dt = self._dt()
+        raw = dt.get("3D", dt.get(KEY_SET_TEMP_STATE))
+        if raw is None:
             return None
-        return float(self._int(KEY_SET_TEMP_STATE, 25))
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """디버그·앱 대조용 원본 키."""
+        """앱 대조: 3E=실내, 3D=희망 — 카드 큰 숫자는 보통 희망온도."""
         power = self._power()
         status = "on" if power == POWER_ON else (
             "auto_dry" if power == POWER_AUTO_DRY else "off"
@@ -157,11 +168,12 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             "carrier_2a_power": power,
             "carrier_power_status": status,
             "carrier_2b_mode": self._int(KEY_MODE),
-            "carrier_3d_set_or_pmv": self._int(KEY_SET_TEMP_STATE),
-            "carrier_3e_room": self._int(KEY_ROOM_TEMP),
-            "carrier_3j_humidity": self._int(KEY_ROOM_HUMIDITY),
+            "희망온도_3D": self._int(KEY_SET_TEMP_STATE),
+            "실내온도_3E": self._int(KEY_ROOM_TEMP),
+            "실내습도_3J": self._int(KEY_ROOM_HUMIDITY),
             "carrier_pmv": self._is_pmv(),
         }
+
 
 
     @property
