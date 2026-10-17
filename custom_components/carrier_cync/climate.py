@@ -106,18 +106,42 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         except (TypeError, ValueError):
             return default
 
+    def _is_pmv(self) -> bool:
+        return self._int(KEY_MODE) in (MODE_PMV_COOL, MODE_PMV_HEAT)
+
     @property
     def current_temperature(self) -> float | None:
-        return float(self._int(KEY_ROOM_TEMP, 0)) or None
+        # 실내온도는 항상 3E (3D는 희망온도/PMV단계 — 혼동 금지)
+        if KEY_ROOM_TEMP not in self._dt():
+            return None
+        return float(self._int(KEY_ROOM_TEMP, 0))
 
     @property
     def current_humidity(self) -> int | None:
-        val = self._int(KEY_ROOM_HUMIDITY, 0)
-        return val if val else None
+        if KEY_ROOM_HUMIDITY not in self._dt():
+            return None
+        return self._int(KEY_ROOM_HUMIDITY, 0)
 
     @property
     def target_temperature(self) -> float | None:
+        # PMV일 때 3D는 온도가 아니라 단계 관련 값 → 온도 게이지에 쓰지 않음
+        if self._is_pmv():
+            return None
+        if KEY_SET_TEMP_STATE not in self._dt():
+            return None
         return float(self._int(KEY_SET_TEMP_STATE, 25))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """디버그·앱 대조용 원본 키."""
+        return {
+            "carrier_2a_power": self._int(KEY_POWER),
+            "carrier_2b_mode": self._int(KEY_MODE),
+            "carrier_3d_set_or_pmv": self._int(KEY_SET_TEMP_STATE),
+            "carrier_3e_room": self._int(KEY_ROOM_TEMP),
+            "carrier_3j_humidity": self._int(KEY_ROOM_HUMIDITY),
+            "carrier_pmv": self._is_pmv(),
+        }
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -133,6 +157,7 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         if mode == MODE_FAN:
             return HVACMode.FAN_ONLY
         return HVACMode.OFF
+
 
     @property
     def hvac_action(self) -> HVACAction | None:
@@ -169,8 +194,9 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set HVAC mode. Server needs a few seconds before dt reflects it."""
         mode = hvac_mode.value if isinstance(hvac_mode, HVACMode) else str(hvac_mode)
+        mode = mode.lower().strip()
 
-        if mode == HVACMode.OFF or mode == "off":
+        if mode == "off":
             await self._api.set_value(KEY_POWER, 0)
             self._patch_dt(**{KEY_POWER: 0})
             await self._refresh_later()
@@ -181,20 +207,25 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             "heat": MODE_HEAT,
             "dry": MODE_DRY,
             "fan_only": MODE_FAN,
-            HVACMode.COOL: MODE_COOL,
-            HVACMode.HEAT: MODE_HEAT,
-            HVACMode.DRY: MODE_DRY,
-            HVACMode.FAN_ONLY: MODE_FAN,
+            "fan-only": MODE_FAN,
         }
-        target = mode_map.get(mode, MODE_COOL)
+        if mode not in mode_map:
+            _LOGGER.warning("Unknown hvac_mode %r, ignored", mode)
+            return
+        target = mode_map[mode]
         powered = self._int(KEY_POWER) == 1
 
         try:
+            # 전원과 모드를 확실히 순서대로 (연타 시 첫 명령만 먹는 서버 특성 완화)
             if not powered:
                 await self._api.set_value(KEY_POWER, 1)
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.5)
             await self._api.set_value(KEY_MODE, target)
-            _LOGGER.debug("Carrier mode set to %s (2B=%s)", mode, target)
+            await asyncio.sleep(0.5)
+            # 송풍(공기청정) 등은 한 번에 안 먹을 때가 있어 한 번 더
+            if target == MODE_FAN:
+                await self._api.set_value(KEY_MODE, MODE_FAN)
+            _LOGGER.info("Carrier mode set to %s (2B=%s)", mode, target)
         except Exception:
             _LOGGER.exception("Carrier set_hvac_mode failed")
             raise
@@ -205,6 +236,10 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
+            return
+        # PMV 중에는 희망온도 대신 단계 키를 쓰므로 일반 온도 쓰기 스킵에 가깝게
+        if self._is_pmv():
+            _LOGGER.debug("Skip set_temperature while PMV mode")
             return
         write_val = int(float(temp) * 2)
         await self._api.set_value(KEY_SET_TEMP_WRITE, write_val)
@@ -218,14 +253,18 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             target = MODE_PMV_HEAT if is_heat else MODE_PMV_COOL
             if self._int(KEY_POWER) != 1:
                 await self._api.set_value(KEY_POWER, 1)
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.5)
             await self._api.set_value(KEY_MODE, target)
-            self._patch_dt(**{KEY_POWER: 1, KEY_MODE: target})
+            await asyncio.sleep(0.4)
+            # PMV 단계를 0.0 으로 (쓰기: 표시값×10 → 0)
+            await self._api.set_value(KEY_SET_TEMP_STATE, 0)
+            self._patch_dt(**{KEY_POWER: 1, KEY_MODE: target, KEY_SET_TEMP_STATE: 0})
         else:
             target = MODE_HEAT if is_heat else MODE_COOL
             await self._api.set_value(KEY_MODE, target)
             self._patch_dt(**{KEY_MODE: target})
         await self._refresh_later()
+
 
     async def async_turn_on(self) -> None:
         await self._api.set_value(KEY_POWER, 1)
