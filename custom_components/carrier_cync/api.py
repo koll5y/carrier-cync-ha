@@ -71,7 +71,10 @@ class CarrierCyncApi:
         data = self._base_payload("control")
         data["key"] = str(key)
         data["val"] = str(val)
-        return await self._post(data)
+        result = await self._post(data)
+        _LOGGER.debug("Carrier control key=%s val=%s -> %s", key, val, result)
+        return result
+
 
     async def async_test_connection(self) -> dict[str, Any]:
         """Validate credentials by reading dt."""
