@@ -65,12 +65,12 @@ async def async_setup_entry(
             CarrierEnergySensor(
                 coordinator, entry, "energy_month", "이번달에너지",
                 "month_kwh", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
-                SensorStateClass.TOTAL,
+                SensorStateClass.TOTAL_INCREASING,
             ),
             CarrierEnergySensor(
                 coordinator, entry, "energy_last_month", "저번달에너지",
-                "last_month_kwh", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
-                SensorStateClass.TOTAL,
+                "last_month_kwh", UnitOfEnergy.KILO_WATT_HOUR, None,
+                SensorStateClass.MEASUREMENT,
             ),
         ]
     )
@@ -173,13 +173,16 @@ class CarrierEnergySensor(CoordinatorEntity, SensorEntity):
         self._attr_name = name
         self._attr_unique_id = f"{device_id}_{key}"
         self._attr_native_unit_of_measurement = unit
-        self._attr_device_class = device_class
+        if device_class is not None:
+            self._attr_device_class = device_class
         self._attr_state_class = state_class
         self._attr_device_info = _device_info(entry)
-        if device_class == SensorDeviceClass.POWER:
-            self._attr_icon = "mdi:flash"
-        else:
-            self._attr_icon = "mdi:lightning-bolt"
+        self._attr_icon = "mdi:flash" if device_class == SensorDeviceClass.POWER else "mdi:lightning-bolt"
+
+    @property
+    def available(self) -> bool:
+        energy = (self.coordinator.data or {}).get("energy")
+        return energy is not None and self._field in energy and energy.get(self._field) is not None
 
     @property
     def native_value(self):

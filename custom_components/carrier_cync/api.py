@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -38,12 +39,15 @@ class CarrierCyncApi:
             url,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=aiohttp.ClientTimeout(total=15),
+            timeout=aiohttp.ClientTimeout(total=12),
         ) as resp:
             resp.raise_for_status()
             result = await resp.json(content_type=None)
             if result.get("message") not in ("success", None) and result.get("code") not in (
-                200, "200", 0, "0",
+                200,
+                "200",
+                0,
+                "0",
             ):
                 _LOGGER.warning("Carrier API unexpected response: %s", result)
             return result
@@ -68,35 +72,50 @@ class CarrierCyncApi:
 
     async def get_status(self) -> dict[str, Any]:
         data = await self.get_dt()
-        energy: dict[str, Any] = {}
+        energy: dict[str, Any] = {
+            "now_kw": None,
+            "month_kwh": None,
+            "last_month_kwh": None,
+        }
         try:
-            emin = await self.get_energy("min")
-            energy["now_kw"] = float(emin.get("now") or 0)
-        except Exception as err:
-            _LOGGER.warning("Energy min failed: %s", err)
-            energy["now_kw"] = None
-        try:
-            eday = await self.get_energy("day")
-            items = eday.get("items") or []
-            energy["month_kwh"] = round(
-                sum(float(i.get("value") or 0) for i in items), 3
+            emin, eday, emon = await asyncio.gather(
+                self.get_energy("min"),
+                self.get_energy("day"),
+                self.get_energy("month"),
+                return_exceptions=True,
             )
+            if isinstance(emin, dict):
+                try:
+                    energy["now_kw"] = float(emin.get("now") if emin.get("now") is not None else 0)
+                except (TypeError, ValueError):
+                    energy["now_kw"] = 0.0
+            else:
+                _LOGGER.warning("Energy min failed: %s", emin)
+
+            if isinstance(eday, dict):
+                items = eday.get("items") or []
+                try:
+                    energy["month_kwh"] = round(
+                        sum(float(i.get("value") or 0) for i in items), 3
+                    )
+                except (TypeError, ValueError):
+                    energy["month_kwh"] = 0.0
+            else:
+                _LOGGER.warning("Energy day failed: %s", eday)
+
+            if isinstance(emon, dict):
+                items = emon.get("items") or []
+                try:
+                    energy["last_month_kwh"] = (
+                        round(float(items[-1].get("value") or 0), 3) if items else 0.0
+                    )
+                except (TypeError, ValueError):
+                    energy["last_month_kwh"] = 0.0
+            else:
+                _LOGGER.warning("Energy month failed: %s", emon)
         except Exception as err:
-            _LOGGER.warning("Energy day failed: %s", err)
-            energy["month_kwh"] = None
-        try:
-            emon = await self.get_energy("month")
-            items = emon.get("items") or []
-            # 마지막 항목 = 직전 완료 월(이번 달이 목록에 없을 때)
-            energy["last_month_kwh"] = (
-                round(float(items[-1].get("value") or 0), 3) if items else None
-            )
-            energy["month_items"] = [
-                {"label": i.get("label"), "value": i.get("value")} for i in items[-6:]
-            ]
-        except Exception as err:
-            _LOGGER.warning("Energy month failed: %s", err)
-            energy["last_month_kwh"] = None
+            _LOGGER.warning("Energy fetch failed: %s", err)
+
         data["energy"] = energy
         return data
 
