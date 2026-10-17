@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Carrier Cync",
+        "description": "Cync 앱의 member_id와 device_id를 입력하세요.",
+        "data": {
+          "member_id": "Member ID",
+          "device_id": "Device ID",
+          "device_model": "Device Model",
+          "name": "이름",
+          "scan_interval": "조회 주기(초)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "서버에 연결할 수 없거나 기기를 찾을 수 없습니다."
+    },
+    "abort": {
+      "already_configured": "이미 등록된 기기입니다."
+    }
+  }
+}
