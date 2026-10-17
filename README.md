@@ -17,7 +17,7 @@
 | 항목 | 예시 |
 |------|------|
 | Member ID | 앱 계정 ID |
-| Device ID | 기기 ID (예: `8c4b14f31cb0`) |
+| Device ID | 기기 ID (예: `8c4b14f88cb0`) |
 | Device Model | `SA` |
 
 ## 기능
