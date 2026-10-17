@@ -78,8 +78,15 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
     _attr_min_temp = 17
     _attr_max_temp = 30
     _attr_target_temperature_step = 1
-    # 바람세기: 쓰기 3C / 읽기 3S (31·13=자동)
-    _attr_fan_modes = ["자동", "약", "중", "강"]
+    # 앱 송풍: 바람 1~18단 (쓰기 3C, 읽기 3S)
+    _attr_fan_modes = [str(i) for i in range(1, 19)]
+    _attr_supported_features = (
+        ClimateEntityFeature.TARGET_TEMPERATURE
+        | ClimateEntityFeature.FAN_MODE
+        | ClimateEntityFeature.PRESET_MODE
+        | ClimateEntityFeature.TURN_ON
+        | ClimateEntityFeature.TURN_OFF
+    )
 
     def __init__(self, coordinator, api, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -163,42 +170,34 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
+        """송풍 시에도 FAN_MODE 유지. 희망온도는 target_temperature=None 으로 숨김."""
         feats = (
             ClimateEntityFeature.TURN_ON
             | ClimateEntityFeature.TURN_OFF
             | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.FAN_MODE
         )
         mode = self._int(KEY_MODE)
         if not self._is_running():
             return feats
         if mode == MODE_FAN:
-            # 송풍(공기청정): 바람세기만
-            return feats | ClimateEntityFeature.FAN_MODE
-        if mode == MODE_DRY:
-            # 제습: 온도 대신 습도 게이지가 맞지만 HA climate 기본은 온도
-            return feats | ClimateEntityFeature.TARGET_TEMPERATURE
-        # 냉방/난방 (+PMV는 프리셋)
-        return (
-            feats
-            | ClimateEntityFeature.TARGET_TEMPERATURE
-            | ClimateEntityFeature.FAN_MODE
-        )
-
-    def _fan_label(self) -> str:
-        s = self._int(KEY_FAN_STATE, 31)
-        if s in (31, 13):
-            return "자동"
-        if s <= 10:
-            return "약"
-        if s <= 18:
-            return "중"
-        return "강"
+            return feats  # 바람세기만 (온도 없음)
+        return feats | ClimateEntityFeature.TARGET_TEMPERATURE
 
     @property
     def fan_mode(self) -> str | None:
-        if not self._is_running():
-            return None
-        return self._fan_label()
+        """3S 1~18 단. 범위 밖이면 보정."""
+        s = self._int(KEY_FAN_STATE, 1)
+        if s < 1:
+            s = 1
+        if s > 18:
+            # 과거 자동값 등 → 가까운 단으로
+            s = 18 if s not in (31, 13) else 1
+        return str(s)
+
+    @property
+    def fan_modes(self) -> list[str]:
+        return [str(i) for i in range(1, 19)]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -217,6 +216,9 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             "실내온도_3E_참고": self._int(KEY_ROOM_TEMP_ALT),
             "실내습도_3J": self._int(KEY_ROOM_HUMIDITY),
             "carrier_pmv": self._is_pmv(),
+            "현재전력_kW": ((self.coordinator.data or {}).get("energy") or {}).get("now_kw"),
+            "이번달_kWh": ((self.coordinator.data or {}).get("energy") or {}).get("month_kwh"),
+            "저번달_kWh": ((self.coordinator.data or {}).get("energy") or {}).get("last_month_kwh"),
         }
 
 
@@ -331,48 +333,37 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         return False
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """바람세기 설정 (3C)."""
-        mapping = {
-            "자동": 31,
-            "auto": 31,
-            "약": 10,
-            "low": 10,
-            "중": 15,
-            "medium": 15,
-            "강": 25,
-            "high": 25,
-        }
-        key = (fan_mode or "").strip()
-        if key not in mapping:
+        """바람세기 1~18 (3C 쓰기, 3S 확인). 서버 반영에 수 초 지연 있음."""
+        try:
+            level = int(str(fan_mode).strip())
+        except (TypeError, ValueError):
             _LOGGER.warning("Unknown fan_mode %r", fan_mode)
             return
-        val = mapping[key]
-        await self._api.set_value(KEY_FAN_WRITE, val)
-        # 자동(31)은 읽기 3S 가 13 또는 31 로 올 수 있음
-        if val == 31:
-            self._patch_dt(**{KEY_FAN_STATE: 13})
-            self._set_pending({KEY_FAN_STATE: 13}, hold_seconds=15)
-            import time
-            deadline = time.monotonic() + 12
-            while time.monotonic() < deadline:
-                try:
-                    data = await self._api.get_dt()
-                except Exception:
-                    await asyncio.sleep(1)
-                    continue
-                s = int((data.get("dt") or {}).get(KEY_FAN_STATE, -1) or -1)
-                if s in (13, 31):
-                    merged = dict(self.coordinator.data or {})
-                    merged.update(data)
-                    self.coordinator.async_set_updated_data(merged)
-                    ed = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
-                    if ed is not None:
-                        ed["pending"] = None
-                    return
+        level = max(1, min(18, level))
+        await self._api.set_value(KEY_FAN_WRITE, level)
+        # 3S 가 한 템포 늦게 맞는 경우가 있어 여유 있게 대기
+        self._patch_dt(**{KEY_FAN_STATE: level})
+        self._set_pending({KEY_FAN_STATE: level}, hold_seconds=20)
+        import time
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                data = await self._api.get_dt()
+            except Exception:
                 await asyncio.sleep(1)
-            await self.coordinator.async_request_refresh()
-        else:
-            await self._wait_confirmed({KEY_FAN_STATE: val}, timeout=12)
+                continue
+            s = int((data.get("dt") or {}).get(KEY_FAN_STATE, -1) or -1)
+            if s == level:
+                merged = dict(self.coordinator.data or {})
+                merged.update(data)
+                self.coordinator.async_set_updated_data(merged)
+                ed = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+                if ed is not None:
+                    ed["pending"] = None
+                return
+            await asyncio.sleep(1)
+        await self.coordinator.async_request_refresh()
+
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         mode = hvac_mode.value if isinstance(hvac_mode, HVACMode) else str(hvac_mode)
@@ -418,9 +409,7 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.debug("Skip set_temperature while PMV mode")
             return
         write_val = int(float(temp) * 2)
-        await self._api.set_value(KEY_SET_TEMP_WRITE,
-    KEY_FAN_WRITE,
-    KEY_FAN_STATE, write_val)
+        await self._api.set_value(KEY_SET_TEMP_WRITE, write_val)
         # 희망온도 읽기 키 3D 가 맞을 때까지 대기
         await self._wait_confirmed({KEY_SET_TEMP_STATE: int(float(temp))}, timeout=12)
 

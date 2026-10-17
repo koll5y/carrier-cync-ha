@@ -60,17 +60,14 @@ async def async_setup_entry(
             CarrierEnergySensor(
                 coordinator, entry, "energy_now", "현재전력",
                 "now_kw", UnitOfPower.KILO_WATT, SensorDeviceClass.POWER,
-                SensorStateClass.MEASUREMENT,
             ),
             CarrierEnergySensor(
                 coordinator, entry, "energy_month", "이번달에너지",
-                "month_kwh", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
-                SensorStateClass.TOTAL_INCREASING,
+                "month_kwh", UnitOfEnergy.KILO_WATT_HOUR, None,
             ),
             CarrierEnergySensor(
                 coordinator, entry, "energy_last_month", "저번달에너지",
                 "last_month_kwh", UnitOfEnergy.KILO_WATT_HOUR, None,
-                SensorStateClass.MEASUREMENT,
             ),
         ]
     )
@@ -164,8 +161,10 @@ class CarrierPowerStatusSensor(CoordinatorEntity, SensorEntity):
 
 
 class CarrierEnergySensor(CoordinatorEntity, SensorEntity):
+    """Energy / power from statistic.php."""
+
     def __init__(
-        self, coordinator, entry, key, name, energy_field, unit, device_class, state_class
+        self, coordinator, entry, key, name, energy_field, unit, device_class
     ) -> None:
         super().__init__(coordinator)
         device_id = entry.data[CONF_DEVICE_ID]
@@ -175,22 +174,30 @@ class CarrierEnergySensor(CoordinatorEntity, SensorEntity):
         self._attr_native_unit_of_measurement = unit
         if device_class is not None:
             self._attr_device_class = device_class
-        self._attr_state_class = state_class
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_info = _device_info(entry)
-        self._attr_icon = "mdi:flash" if device_class == SensorDeviceClass.POWER else "mdi:lightning-bolt"
+        self._attr_icon = "mdi:flash"
 
     @property
     def available(self) -> bool:
-        energy = (self.coordinator.data or {}).get("energy")
-        return energy is not None and self._field in energy and energy.get(self._field) is not None
+        return self.coordinator.last_update_success
 
     @property
     def native_value(self):
         energy = (self.coordinator.data or {}).get("energy") or {}
         val = energy.get(self._field)
+        # 없으면 0 으로라도 표시 (알 수 없음 방지)
         if val is None:
-            return None
+            return 0.0
         try:
             return float(val)
         except (TypeError, ValueError):
-            return None
+            return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        energy = (self.coordinator.data or {}).get("energy") or {}
+        return {
+            "raw": energy.get(self._field),
+            "energy_keys": list(energy.keys()),
+        }
