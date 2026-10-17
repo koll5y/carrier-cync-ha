@@ -1,4 +1,4 @@
-"""Sensors for Carrier Cync."""
+"""Sensors for Carrier Cync — indoor/outdoor unit (dt) only."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ async def async_setup_entry(
                 entry,
                 "room_temp",
                 "실내온도",
-                KEY_ROOM_TEMP,
+                KEY_ROOM_TEMP,  # 3E 실내기
                 UnitOfTemperature.CELSIUS,
                 SensorDeviceClass.TEMPERATURE,
             ),
@@ -49,45 +49,25 @@ async def async_setup_entry(
                 entry,
                 "room_humidity",
                 "실내습도",
-                KEY_ROOM_HUMIDITY,
+                KEY_ROOM_HUMIDITY,  # 3J 실내기
                 PERCENTAGE,
                 SensorDeviceClass.HUMIDITY,
             ),
-            # 앱 실외 표시와 맞추기: weather.php
-            CarrierWeatherSensor(
+            CarrierDtSensor(
                 coordinator,
                 entry,
                 "outdoor_temp",
                 "실외온도",
-                "temperature",
+                KEY_OUTDOOR_TEMP_UNIT,  # 1L 실외기
                 UnitOfTemperature.CELSIUS,
                 SensorDeviceClass.TEMPERATURE,
             ),
-            CarrierWeatherSensor(
+            CarrierDtSensor(
                 coordinator,
                 entry,
                 "outdoor_humidity",
                 "실외습도",
-                "humidity",
-                PERCENTAGE,
-                SensorDeviceClass.HUMIDITY,
-            ),
-            # 참고용 (실외기 dt 값 — 앱 날씨 숫자와 다를 수 있음)
-            CarrierDtSensor(
-                coordinator,
-                entry,
-                "outdoor_temp_unit",
-                "실외온도(실외기)",
-                KEY_OUTDOOR_TEMP_UNIT,
-                UnitOfTemperature.CELSIUS,
-                SensorDeviceClass.TEMPERATURE,
-            ),
-            CarrierDtSensor(
-                coordinator,
-                entry,
-                "outdoor_humidity_unit",
-                "실외습도(실외기)",
-                KEY_OUTDOOR_HUMI_UNIT,
+                KEY_OUTDOOR_HUMI_UNIT,  # 1A 실외기(실측 후보)
                 PERCENTAGE,
                 SensorDeviceClass.HUMIDITY,
             ),
@@ -106,7 +86,7 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 class CarrierDtSensor(CoordinatorEntity, SensorEntity):
-    """Sensor from dt map."""
+    """Sensor from indoor/outdoor unit dt fields."""
 
     def __init__(
         self,
@@ -139,45 +119,6 @@ class CarrierDtSensor(CoordinatorEntity, SensorEntity):
         except (TypeError, ValueError):
             return None
 
-
-class CarrierWeatherSensor(CoordinatorEntity, SensorEntity):
-    """Sensor from weather.php (app outdoor display source)."""
-
-    def __init__(
-        self,
-        coordinator,
-        entry: ConfigEntry,
-        key: str,
-        name: str,
-        weather_field: str,
-        unit: str,
-        device_class: SensorDeviceClass,
-    ) -> None:
-        super().__init__(coordinator)
-        device_id = entry.data[CONF_DEVICE_ID]
-        self._field = weather_field
-        self._attr_name = name
-        self._attr_unique_id = f"{device_id}_{key}"
-        self._attr_native_unit_of_measurement = unit
-        self._attr_device_class = device_class
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_device_info = _device_info(entry)
-
-    @property
-    def native_value(self):
-        weather = (self.coordinator.data or {}).get("weather") or {}
-        val = weather.get(self._field)
-        if val is None:
-            return None
-        try:
-            return round(float(val), 1)
-        except (TypeError, ValueError):
-            return None
-
     @property
     def extra_state_attributes(self):
-        weather = (self.coordinator.data or {}).get("weather") or {}
-        return {
-            "location": weather.get("location"),
-            "cloud": weather.get("cloud"),
-        }
+        return {"carrier_dt_key": self._dt_key}

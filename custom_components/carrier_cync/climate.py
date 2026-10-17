@@ -121,10 +121,15 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
-        # 실내온도는 항상 3E (3D는 희망온도/PMV단계 — 혼동 금지)
-        if KEY_ROOM_TEMP not in self._dt():
+        """Always indoor unit room temp (3E). Never outdoor / weather."""
+        dt = self._dt()
+        if "3E" not in dt and KEY_ROOM_TEMP not in dt:
             return None
-        return float(self._int(KEY_ROOM_TEMP, 0))
+        try:
+            return float(dt.get(KEY_ROOM_TEMP, dt.get("3E")))
+        except (TypeError, ValueError):
+            return None
+
 
     @property
     def current_humidity(self) -> int | None:
