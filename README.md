@@ -8,7 +8,7 @@
 ## 설치 (HACS)
 
 1. HACS → 우측 상단 ⋮ → **Custom repositories**
-2. Repository: `YOUR_GITHUB_USERNAME/carrier-cync-ha`
+2. Repository: `koll5y/carrier-cync-ha`
 3. Category: **Integration**
 4. HACS에서 **Carrier Cync** 검색 후 Download
 5. Home Assistant 재시작
