@@ -168,6 +168,7 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         return {
             "carrier_2a_power": power,
             "carrier_power_status": status,
+            "자동건조": power == POWER_AUTO_DRY,
             "carrier_2b_mode": self._int(KEY_MODE),
             "희망온도_3D": self._int(KEY_SET_TEMP_STATE),
             "실내온도_3A_x10": self._int(KEY_ROOM_TEMP_READ),
@@ -213,6 +214,8 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def preset_mode(self) -> str | None:
+        if not self._is_running():
+            return PRESET_NONE
         mode = self._int(KEY_MODE)
         if mode in (MODE_PMV_COOL, MODE_PMV_HEAT):
             return PRESET_PMV

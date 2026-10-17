@@ -7,14 +7,12 @@ from typing import Any
 
 import aiohttp
 
-from .const import API_CONTROL, API_WEATHER
+from .const import API_CONTROL, API_STATISTIC
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class CarrierCyncApi:
-    """Client for control.php + weather.php."""
-
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -45,16 +43,12 @@ class CarrierCyncApi:
             resp.raise_for_status()
             result = await resp.json(content_type=None)
             if result.get("message") not in ("success", None) and result.get("code") not in (
-                200,
-                "200",
-                0,
-                "0",
+                200, "200", 0, "0",
             ):
                 _LOGGER.warning("Carrier API unexpected response: %s", result)
             return result
 
     async def get_dt(self) -> dict[str, Any]:
-        """Fetch device status (dt map)."""
         result = await self._post(API_CONTROL, self._base_payload("dt"))
         response = result.get("response") or {}
         dt = response.get("dt") or {}
@@ -66,24 +60,47 @@ class CarrierCyncApi:
             "dt": {str(k): v for k, v in dt.items()},
         }
 
-    async def get_weather(self) -> dict[str, Any]:
-        """Fetch outdoor weather used by the app (temp matches app outdoor)."""
-        result = await self._post(API_WEATHER, self._base_payload("weather"))
-        response = result.get("response") or {}
-        return {
-            "location": response.get("location"),
-            "temperature": response.get("temperature"),
-            "humidity": response.get("humidity"),
-            "cloud": response.get("cloud"),
-            "icon": response.get("icon"),
-        }
+    async def get_energy(self, term: str) -> dict[str, Any]:
+        data = self._base_payload("energy")
+        data["term"] = term
+        result = await self._post(API_STATISTIC, data)
+        return result.get("response") or {}
 
     async def get_status(self) -> dict[str, Any]:
-        """Coordinator payload (device dt only)."""
-        return await self.get_dt()
+        data = await self.get_dt()
+        energy: dict[str, Any] = {}
+        try:
+            emin = await self.get_energy("min")
+            energy["now_kw"] = float(emin.get("now") or 0)
+        except Exception as err:
+            _LOGGER.warning("Energy min failed: %s", err)
+            energy["now_kw"] = None
+        try:
+            eday = await self.get_energy("day")
+            items = eday.get("items") or []
+            energy["month_kwh"] = round(
+                sum(float(i.get("value") or 0) for i in items), 3
+            )
+        except Exception as err:
+            _LOGGER.warning("Energy day failed: %s", err)
+            energy["month_kwh"] = None
+        try:
+            emon = await self.get_energy("month")
+            items = emon.get("items") or []
+            # 마지막 항목 = 직전 완료 월(이번 달이 목록에 없을 때)
+            energy["last_month_kwh"] = (
+                round(float(items[-1].get("value") or 0), 3) if items else None
+            )
+            energy["month_items"] = [
+                {"label": i.get("label"), "value": i.get("value")} for i in items[-6:]
+            ]
+        except Exception as err:
+            _LOGGER.warning("Energy month failed: %s", err)
+            energy["last_month_kwh"] = None
+        data["energy"] = energy
+        return data
 
     async def set_value(self, key: str, val: str | int) -> dict[str, Any]:
-        """Write a single control key."""
         data = self._base_payload("control")
         data["key"] = str(key)
         data["val"] = str(val)
@@ -92,7 +109,6 @@ class CarrierCyncApi:
         return result
 
     async def async_test_connection(self) -> dict[str, Any]:
-        """Validate credentials by reading dt."""
         data = await self.get_dt()
         if not data.get("dt"):
             raise ConnectionError("Empty dt response")

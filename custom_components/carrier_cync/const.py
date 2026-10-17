@@ -8,21 +8,18 @@ DEFAULT_SCAN_INTERVAL = 20
 API_BASE = "https://www.carrieriot.com/api/v1"
 API_CONTROL = f"{API_BASE}/control.php"
 API_WEATHER = f"{API_BASE}/weather.php"
+API_STATISTIC = f"{API_BASE}/statistic.php"
 
-# dt / control keys (SA 실측)
 KEY_POWER = "2A"
 KEY_MODE = "2B"
 KEY_OPTIONS = "2C"
 KEY_SPLASH = "2D"
-# 주의: 3A 는 읽기/쓰기 스케일이 다름
-#   READ  3A = 실내온도 × 10  (예: 220 → 22.0°C)  ← 앱 실내온도와 일치
-#   WRITE 3A = 희망온도 × 2   (예: 25°C → 50)
-KEY_ROOM_TEMP_READ = "3A"
-KEY_SET_TEMP_WRITE = "3A"
+KEY_ROOM_TEMP_READ = "3A"  # READ: °C * 10
+KEY_SET_TEMP_WRITE = "3A"  # WRITE: °C * 2
 KEY_SET_HUMIDITY = "3B"
 KEY_FAN = "3C"
-KEY_SET_TEMP_STATE = "3D"  # 희망온도 °C (읽기)
-KEY_ROOM_TEMP_ALT = "3E"  # 모드에 따라 희망온도를 따라가기도 함 (비권장)
+KEY_SET_TEMP_STATE = "3D"
+KEY_ROOM_TEMP_ALT = "3E"
 KEY_ROOM_HUMIDITY = "3J"
 KEY_SET_HUMIDITY_STATE = "3K"
 KEY_FAN_STATE = "3S"
