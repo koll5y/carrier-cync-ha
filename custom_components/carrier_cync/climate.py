@@ -218,28 +218,80 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             return PRESET_PMV
         return PRESET_NONE
 
+
     def _patch_dt(self, **keys: int) -> None:
         """Optimistically update coordinator cache so UI does not snap back."""
         data = dict(self.coordinator.data or {})
         dt = dict(data.get("dt") or {})
         for key, val in keys.items():
-            dt[key] = val
+            dt[str(key)] = val
         data["dt"] = dt
         self.coordinator.async_set_updated_data(data)
 
-    async def _refresh_later(self) -> None:
-        await asyncio.sleep(_REFRESH_DELAY)
+    def _set_pending(self, expect: dict[str, int], hold_seconds: float = 20.0) -> None:
+        """Hold expected keys until server dt matches (blocks stale poll overwrite)."""
+        import time
+
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+        if entry_data is not None:
+            entry_data["pending"] = {
+                "expect": {str(k): int(v) for k, v in expect.items()},
+                "until": time.monotonic() + hold_seconds,
+            }
+
+    async def _wait_confirmed(
+        self,
+        expect: dict[str, int],
+        timeout: float = 15.0,
+        interval: float = 1.0,
+    ) -> bool:
+        """Poll dt until expected keys match, then publish confirmed state."""
+        import time
+
+        self._set_pending(expect, hold_seconds=timeout + 5)
+        self._patch_dt(**expect)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                data = await self._api.get_dt()
+            except Exception:
+                _LOGGER.exception("Confirm poll failed")
+                await asyncio.sleep(interval)
+                continue
+            dt = data.get("dt") or {}
+            ok = True
+            for key, val in expect.items():
+                try:
+                    if int(dt.get(str(key), -999)) != int(val):
+                        ok = False
+                        break
+                except (TypeError, ValueError):
+                    ok = False
+                    break
+            if ok:
+                merged = dict(self.coordinator.data or {})
+                merged.update(data)
+                self.coordinator.async_set_updated_data(merged)
+                entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+                if entry_data is not None:
+                    entry_data["pending"] = None
+                _LOGGER.info("Carrier control confirmed: %s", expect)
+                return True
+            # keep optimistic UI
+            self._patch_dt(**expect)
+            await asyncio.sleep(interval)
+
+        _LOGGER.warning("Carrier control not confirmed within %ss: %s", timeout, expect)
         await self.coordinator.async_request_refresh()
+        return False
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set HVAC mode. Server needs a few seconds before dt reflects it."""
         mode = hvac_mode.value if isinstance(hvac_mode, HVACMode) else str(hvac_mode)
         mode = mode.lower().strip()
 
         if mode == "off":
             await self._api.set_value(KEY_POWER, 0)
-            self._patch_dt(**{KEY_POWER: 0})
-            await self._refresh_later()
+            await self._wait_confirmed({KEY_POWER: 0}, timeout=15)
             return
 
         mode_map = {
@@ -253,39 +305,33 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.warning("Unknown hvac_mode %r, ignored", mode)
             return
         target = mode_map[mode]
-        powered = self._is_running()
 
         try:
-            # 전원과 모드를 확실히 순서대로 (연타 시 첫 명령만 먹는 서버 특성 완화)
-            if not powered:
+            if not self._is_running():
                 await self._api.set_value(KEY_POWER, POWER_ON)
                 await asyncio.sleep(0.5)
-
             await self._api.set_value(KEY_MODE, target)
-            await asyncio.sleep(0.5)
-            # 송풍(공기청정) 등은 한 번에 안 먹을 때가 있어 한 번 더
             if target == MODE_FAN:
+                await asyncio.sleep(0.4)
                 await self._api.set_value(KEY_MODE, MODE_FAN)
-            _LOGGER.info("Carrier mode set to %s (2B=%s)", mode, target)
+            _LOGGER.info("Carrier mode command %s (2B=%s)", mode, target)
         except Exception:
             _LOGGER.exception("Carrier set_hvac_mode failed")
             raise
 
-        self._patch_dt(**{KEY_POWER: 1, KEY_MODE: target})
-        await self._refresh_later()
+        await self._wait_confirmed({KEY_POWER: POWER_ON, KEY_MODE: target}, timeout=15)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
-        # PMV 중에는 희망온도 대신 단계 키를 쓰므로 일반 온도 쓰기 스킵에 가깝게
         if self._is_pmv():
             _LOGGER.debug("Skip set_temperature while PMV mode")
             return
         write_val = int(float(temp) * 2)
         await self._api.set_value(KEY_SET_TEMP_WRITE, write_val)
-        self._patch_dt(**{KEY_SET_TEMP_STATE: int(float(temp))})
-        await self._refresh_later()
+        # 희망온도 읽기 키 3D 가 맞을 때까지 대기
+        await self._wait_confirmed({KEY_SET_TEMP_STATE: int(float(temp))}, timeout=12)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         current = self._int(KEY_MODE)
@@ -297,23 +343,56 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
                 await asyncio.sleep(0.5)
             await self._api.set_value(KEY_MODE, target)
             await asyncio.sleep(0.4)
-            # PMV 단계를 0.0 으로 (쓰기: 표시값×10 → 0)
             await self._api.set_value(KEY_SET_TEMP_STATE, 0)
-            self._patch_dt(**{KEY_POWER: 1, KEY_MODE: target, KEY_SET_TEMP_STATE: 0})
+            await self._wait_confirmed(
+                {KEY_POWER: POWER_ON, KEY_MODE: target}, timeout=15
+            )
         else:
             target = MODE_HEAT if is_heat else MODE_COOL
             await self._api.set_value(KEY_MODE, target)
-            self._patch_dt(**{KEY_MODE: target})
-        await self._refresh_later()
-
+            await self._wait_confirmed(
+                {KEY_POWER: POWER_ON, KEY_MODE: target}, timeout=15
+            )
 
     async def async_turn_on(self) -> None:
         await self._api.set_value(KEY_POWER, POWER_ON)
-        self._patch_dt(**{KEY_POWER: 1})
-        await self._refresh_later()
+        await self._wait_confirmed({KEY_POWER: POWER_ON}, timeout=12)
 
     async def async_turn_off(self) -> None:
         await self._api.set_value(KEY_POWER, 0)
-        self._patch_dt(**{KEY_POWER: 0})
-        await self._refresh_later()
+        # 자동건조(2A=2) 도 꺼짐 표시이므로 0 또는 2 허용은 wait에서 0만 확인
+        # 자동건조 진입 시 2가 될 수 있어 power!=1 이면 성공으로 처리
+        import time
 
+        self._set_pending({KEY_POWER: 0}, hold_seconds=20)
+        self._patch_dt(**{KEY_POWER: 0})
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                data = await self._api.get_dt()
+            except Exception:
+                await asyncio.sleep(1)
+                continue
+            dt = data.get("dt") or {}
+            try:
+                p = int(dt.get(KEY_POWER, 1))
+            except (TypeError, ValueError):
+                p = 1
+            if p != POWER_ON:
+                if p != 0:
+                    dt = dict(dt)
+                    dt[KEY_POWER] = 0  # UI는 off
+                    data = dict(data)
+                    data["dt"] = dt
+                merged = dict(self.coordinator.data or {})
+                merged.update(data)
+                if p == POWER_AUTO_DRY:
+                    merged.setdefault("dt", {})[KEY_POWER] = POWER_AUTO_DRY
+                self.coordinator.async_set_updated_data(merged)
+                entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+                if entry_data is not None:
+                    entry_data["pending"] = None
+                return
+            self._patch_dt(**{KEY_POWER: 0})
+            await asyncio.sleep(1)
+        await self.coordinator.async_request_refresh()

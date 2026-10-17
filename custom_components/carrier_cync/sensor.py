@@ -1,4 +1,4 @@
-"""Sensors for Carrier Cync."""
+"""Sensors for Carrier Cync — indoor + outdoor unit only."""
 
 from __future__ import annotations
 
@@ -37,24 +37,31 @@ async def async_setup_entry(
         [
             CarrierRoomTempSensor(coordinator, entry),
             CarrierDtSensor(
-                coordinator, entry, "room_humidity", "실내습도",
-                KEY_ROOM_HUMIDITY, PERCENTAGE, SensorDeviceClass.HUMIDITY,
-            ),
-            CarrierWeatherSensor(
-                coordinator, entry, "outdoor_temp", "실외온도",
-                "temperature", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
-            ),
-            CarrierWeatherSensor(
-                coordinator, entry, "outdoor_humidity", "실외습도",
-                "humidity", PERCENTAGE, SensorDeviceClass.HUMIDITY,
+                coordinator,
+                entry,
+                "room_humidity",
+                "실내습도",
+                KEY_ROOM_HUMIDITY,
+                PERCENTAGE,
+                SensorDeviceClass.HUMIDITY,
             ),
             CarrierDtSensor(
-                coordinator, entry, "odu_temp", "실외기온도",
-                KEY_OUTDOOR_TEMP_UNIT, UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
+                coordinator,
+                entry,
+                "odu_temp",
+                "실외기온도",
+                KEY_OUTDOOR_TEMP_UNIT,
+                UnitOfTemperature.CELSIUS,
+                SensorDeviceClass.TEMPERATURE,
             ),
             CarrierDtSensor(
-                coordinator, entry, "odu_humidity", "실외기습도",
-                KEY_OUTDOOR_HUMI_UNIT, PERCENTAGE, SensorDeviceClass.HUMIDITY,
+                coordinator,
+                entry,
+                "odu_humidity",
+                "실외기습도",
+                KEY_OUTDOOR_HUMI_UNIT,
+                PERCENTAGE,
+                SensorDeviceClass.HUMIDITY,
             ),
         ]
     )
@@ -71,8 +78,6 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 class CarrierRoomTempSensor(CoordinatorEntity, SensorEntity):
-    """Indoor temp from 3A/10."""
-
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         device_id = entry.data[CONF_DEVICE_ID]
@@ -93,10 +98,6 @@ class CarrierRoomTempSensor(CoordinatorEntity, SensorEntity):
             return round(float(raw) / 10.0, 1)
         except (TypeError, ValueError):
             return None
-
-    @property
-    def extra_state_attributes(self):
-        return {"carrier_dt_key": "3A", "scale": "value/10"}
 
 
 class CarrierDtSensor(CoordinatorEntity, SensorEntity):
@@ -122,40 +123,6 @@ class CarrierDtSensor(CoordinatorEntity, SensorEntity):
         except (TypeError, ValueError):
             return None
 
-
-class CarrierWeatherSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, entry, key, name, weather_field, unit, device_class) -> None:
-        super().__init__(coordinator)
-        device_id = entry.data[CONF_DEVICE_ID]
-        self._field = weather_field
-        self._attr_name = name
-        self._attr_unique_id = f"{device_id}_{key}"
-        self._attr_native_unit_of_measurement = unit
-        self._attr_device_class = device_class
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_device_info = _device_info(entry)
-
-    @property
-    def available(self) -> bool:
-        weather = (self.coordinator.data or {}).get("weather") or {}
-        return self._field in weather and weather.get(self._field) is not None
-
-    @property
-    def native_value(self):
-        weather = (self.coordinator.data or {}).get("weather") or {}
-        val = weather.get(self._field)
-        if val is None:
-            return None
-        try:
-            return round(float(val), 1)
-        except (TypeError, ValueError):
-            return None
-
     @property
     def extra_state_attributes(self):
-        weather = (self.coordinator.data or {}).get("weather") or {}
-        return {
-            "location": weather.get("location"),
-            "cloud": weather.get("cloud"),
-            "source": "weather.php",
-        }
+        return {"carrier_dt_key": self._dt_key}

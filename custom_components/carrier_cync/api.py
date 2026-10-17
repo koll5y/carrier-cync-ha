@@ -79,14 +79,8 @@ class CarrierCyncApi:
         }
 
     async def get_status(self) -> dict[str, Any]:
-        """dt + weather in one coordinator payload."""
-        data = await self.get_dt()
-        try:
-            data["weather"] = await self.get_weather()
-        except Exception as err:
-            _LOGGER.warning("Weather fetch failed: %s", err)
-            data["weather"] = {}
-        return data
+        """Coordinator payload (device dt only)."""
+        return await self.get_dt()
 
     async def set_value(self, key: str, val: str | int) -> dict[str, Any]:
         """Write a single control key."""
