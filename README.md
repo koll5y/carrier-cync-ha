@@ -2,7 +2,8 @@
 
 한국 캐리어 Cync 클라우드 API를 이용한 에어컨 통합입니다.  
 로컬 제어 없이 `carrieriot.com` REST로 상태 조회·제어합니다. 
-시험용입니다. (적용모델:Carrier OSQC16AAWSD)
+
+* 시험용입니다. (적용모델:Carrier OSQC16AAWSD)
 
 ## 설치 (HACS)
 
