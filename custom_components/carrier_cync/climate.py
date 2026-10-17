@@ -36,6 +36,8 @@ from .const import (
     MODE_HEAT,
     MODE_PMV_COOL,
     MODE_PMV_HEAT,
+    POWER_AUTO_DRY,
+    POWER_ON,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,6 +111,14 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
     def _is_pmv(self) -> bool:
         return self._int(KEY_MODE) in (MODE_PMV_COOL, MODE_PMV_HEAT)
 
+    def _power(self) -> int:
+        return self._int(KEY_POWER, 0)
+
+    def _is_running(self) -> bool:
+        """Only 2A==1 is normal run. 0=off, 2=auto-dry after off."""
+        return self._power() == POWER_ON
+
+
     @property
     def current_temperature(self) -> float | None:
         # 실내온도는 항상 3E (3D는 희망온도/PMV단계 — 혼동 금지)
@@ -134,8 +144,13 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """디버그·앱 대조용 원본 키."""
+        power = self._power()
+        status = "on" if power == POWER_ON else (
+            "auto_dry" if power == POWER_AUTO_DRY else "off"
+        )
         return {
-            "carrier_2a_power": self._int(KEY_POWER),
+            "carrier_2a_power": power,
+            "carrier_power_status": status,
             "carrier_2b_mode": self._int(KEY_MODE),
             "carrier_3d_set_or_pmv": self._int(KEY_SET_TEMP_STATE),
             "carrier_3e_room": self._int(KEY_ROOM_TEMP),
@@ -143,9 +158,11 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             "carrier_pmv": self._is_pmv(),
         }
 
+
     @property
     def hvac_mode(self) -> HVACMode:
-        if self._int(KEY_POWER) == 0:
+        # 자동건조(2A=2) 포함, 정상 운전(1)이 아니면 꺼짐
+        if not self._is_running():
             return HVACMode.OFF
         mode = self._int(KEY_MODE)
         if mode in (MODE_COOL, MODE_PMV_COOL):
@@ -159,9 +176,12 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         return HVACMode.OFF
 
 
+
     @property
     def hvac_action(self) -> HVACAction | None:
-        if self.hvac_mode == HVACMode.OFF:
+        if self._power() == POWER_AUTO_DRY:
+            return HVACAction.DRYING  # 앱: 자동 건조중
+        if not self._is_running():
             return HVACAction.OFF
         mapping = {
             HVACMode.COOL: HVACAction.COOLING,
@@ -170,6 +190,7 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             HVACMode.FAN_ONLY: HVACAction.FAN,
         }
         return mapping.get(self.hvac_mode, HVACAction.IDLE)
+
 
     @property
     def preset_mode(self) -> str | None:
@@ -213,13 +234,14 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.warning("Unknown hvac_mode %r, ignored", mode)
             return
         target = mode_map[mode]
-        powered = self._int(KEY_POWER) == 1
+        powered = self._is_running()
 
         try:
             # 전원과 모드를 확실히 순서대로 (연타 시 첫 명령만 먹는 서버 특성 완화)
             if not powered:
-                await self._api.set_value(KEY_POWER, 1)
+                await self._api.set_value(KEY_POWER, POWER_ON)
                 await asyncio.sleep(0.5)
+
             await self._api.set_value(KEY_MODE, target)
             await asyncio.sleep(0.5)
             # 송풍(공기청정) 등은 한 번에 안 먹을 때가 있어 한 번 더
@@ -251,8 +273,8 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
         is_heat = current in (MODE_HEAT, MODE_PMV_HEAT)
         if preset_mode == PRESET_PMV:
             target = MODE_PMV_HEAT if is_heat else MODE_PMV_COOL
-            if self._int(KEY_POWER) != 1:
-                await self._api.set_value(KEY_POWER, 1)
+            if not self._is_running():
+                await self._api.set_value(KEY_POWER, POWER_ON)
                 await asyncio.sleep(0.5)
             await self._api.set_value(KEY_MODE, target)
             await asyncio.sleep(0.4)
@@ -267,7 +289,7 @@ class CarrierCyncClimate(CoordinatorEntity, ClimateEntity):
 
 
     async def async_turn_on(self) -> None:
-        await self._api.set_value(KEY_POWER, 1)
+        await self._api.set_value(KEY_POWER, POWER_ON)
         self._patch_dt(**{KEY_POWER: 1})
         await self._refresh_later()
 

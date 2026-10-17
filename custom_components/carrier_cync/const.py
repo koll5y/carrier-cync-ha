@@ -7,6 +7,7 @@ DEFAULT_SCAN_INTERVAL = 20
 
 API_BASE = "https://www.carrieriot.com/api/v1"
 API_CONTROL = f"{API_BASE}/control.php"
+API_WEATHER = f"{API_BASE}/weather.php"
 
 # dt / control keys (SA 실측)
 KEY_POWER = "2A"
@@ -22,7 +23,13 @@ KEY_ROOM_HUMIDITY = "3J"
 KEY_SET_HUMIDITY_STATE = "3K"
 KEY_FAN_STATE = "3S"
 KEY_PMV_STATE = "3h"
-KEY_OUTDOOR_TEMP = "1L"
+KEY_OUTDOOR_TEMP_UNIT = "1L"
+KEY_OUTDOOR_HUMI_UNIT = "1A"
+
+# 2A: 0=off, 1=on, 2=auto-dry (after power off)
+POWER_OFF = 0
+POWER_ON = 1
+POWER_AUTO_DRY = 2
 
 # 2B mode values
 MODE_COOL = 6
