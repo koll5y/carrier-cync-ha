@@ -95,8 +95,9 @@ class CarrierCyncApi:
             if isinstance(eday, dict):
                 items = eday.get("items") or []
                 try:
-                    energy["month_kwh"] = round(
-                        sum(float(i.get("value") or 0) for i in items), 3
+                    # day items are a running total; the last value is this month
+                    energy["month_kwh"] = (
+                        round(float(items[-1].get("value") or 0), 3) if items else 0.0
                     )
                 except (TypeError, ValueError):
                     energy["month_kwh"] = 0.0
