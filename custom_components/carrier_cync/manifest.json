@@ -7,5 +7,5 @@
   "iot_class": "cloud_polling",
   "requirements": [],
   "issue_tracker": "https://github.com/YOUR_GITHUB_USERNAME/carrier-cync-ha/issues",
-  "version": "0.1.11"
+  "version": "0.1.12"
 }

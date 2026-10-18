@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 from typing import Any
 
@@ -43,6 +43,8 @@ class CarrierCyncApi:
         ) as resp:
             resp.raise_for_status()
             result = await resp.json(content_type=None)
+            if isinstance(result, str):
+                result = json.loads(result)
             if result.get("message") not in ("success", None) and result.get("code") not in (
                 200,
                 "200",
@@ -64,11 +66,37 @@ class CarrierCyncApi:
             "dt": {str(k): v for k, v in dt.items()},
         }
 
+    def _response_dict(self, result: dict[str, Any]) -> dict[str, Any]:
+        resp = result.get("response")
+        if isinstance(resp, str):
+            try:
+                resp = json.loads(resp)
+            except json.JSONDecodeError:
+                resp = None
+        return resp if isinstance(resp, dict) else {}
+
+    @staticmethod
+    def _num(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     async def get_energy(self, term: str) -> dict[str, Any]:
         data = self._base_payload("energy")
         data["term"] = term
         result = await self._post(API_STATISTIC, data)
-        return result.get("response") or {}
+        resp = self._response_dict(result)
+        if not resp:
+            _LOGGER.warning(
+                "Energy term=%s empty response code=%s message=%s",
+                term,
+                result.get("code"),
+                result.get("message"),
+            )
+        return resp
 
     async def get_status(self) -> dict[str, Any]:
         data = await self.get_dt()
@@ -76,45 +104,32 @@ class CarrierCyncApi:
             "now_kw": None,
             "month_kwh": None,
             "last_month_kwh": None,
+            "error": None,
         }
         try:
-            emin, eday, emon = await asyncio.gather(
-                self.get_energy("min"),
-                self.get_energy("day"),
-                self.get_energy("month"),
-                return_exceptions=True,
-            )
-            if isinstance(emin, dict):
-                try:
-                    energy["now_kw"] = float(emin.get("now") if emin.get("now") is not None else 0)
-                except (TypeError, ValueError):
-                    energy["now_kw"] = 0.0
+            # 병렬 호출 시 서버가 빈 응답을 주는 경우가 있어 순서대로 조회
+            emin = await self.get_energy("min")
+            eday = await self.get_energy("day")
+            emon = await self.get_energy("month")
+            energy["now_kw"] = self._num(emin.get("now"))
+            day_items = eday.get("items") or []
+            mon_items = emon.get("items") or []
+            if day_items and isinstance(day_items[-1], dict):
+                energy["month_kwh"] = self._num(day_items[-1].get("value"))
+            if mon_items and isinstance(mon_items[-1], dict):
+                energy["last_month_kwh"] = self._num(mon_items[-1].get("value"))
+            if energy["now_kw"] is None and energy["month_kwh"] is None:
+                energy["error"] = "statistic.php returned no now/items"
+                _LOGGER.warning("Carrier energy empty: min=%s day_items=%s", emin.get("now"), len(day_items))
             else:
-                _LOGGER.warning("Energy min failed: %s", emin)
-
-            if isinstance(eday, dict):
-                items = eday.get("items") or []
-                try:
-                    # day items are a running total; the last value is this month
-                    energy["month_kwh"] = (
-                        round(float(items[-1].get("value") or 0), 3) if items else 0.0
-                    )
-                except (TypeError, ValueError):
-                    energy["month_kwh"] = 0.0
-            else:
-                _LOGGER.warning("Energy day failed: %s", eday)
-
-            if isinstance(emon, dict):
-                items = emon.get("items") or []
-                try:
-                    energy["last_month_kwh"] = (
-                        round(float(items[-1].get("value") or 0), 3) if items else 0.0
-                    )
-                except (TypeError, ValueError):
-                    energy["last_month_kwh"] = 0.0
-            else:
-                _LOGGER.warning("Energy month failed: %s", emon)
+                _LOGGER.info(
+                    "Carrier energy now=%s month=%s last=%s",
+                    energy["now_kw"],
+                    energy["month_kwh"],
+                    energy["last_month_kwh"],
+                )
         except Exception as err:
+            energy["error"] = str(err)
             _LOGGER.warning("Energy fetch failed: %s", err)
 
         data["energy"] = energy

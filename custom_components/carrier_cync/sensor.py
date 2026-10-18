@@ -177,6 +177,7 @@ class CarrierEnergySensor(CoordinatorEntity, SensorEntity):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_info = _device_info(entry)
         self._attr_icon = "mdi:flash"
+        self._attr_suggested_display_precision = 3
 
     @property
     def available(self) -> bool:
@@ -186,18 +187,17 @@ class CarrierEnergySensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         energy = (self.coordinator.data or {}).get("energy") or {}
         val = energy.get(self._field)
-        # 없으면 0 으로라도 표시 (알 수 없음 방지)
         if val is None:
-            return 0.0
+            return None
         try:
             return float(val)
         except (TypeError, ValueError):
-            return 0.0
+            return None
 
     @property
     def extra_state_attributes(self):
         energy = (self.coordinator.data or {}).get("energy") or {}
         return {
             "raw": energy.get(self._field),
-            "energy_keys": list(energy.keys()),
+            "error": energy.get("error"),
         }
