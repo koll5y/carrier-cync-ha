@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -40,11 +41,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     )
 
+    entry_data: dict = {"api": api, "pending": None}
+
     async def async_update() -> dict:
         try:
-            return await api.get_dt()
+            data = await api.get_status()
         except Exception as err:
             raise UpdateFailed(f"Carrier Cync update failed: {err}") from err
+
+        # 명령 직후 서버 반영 전 stale dt 가 UI를 되돌리지 않도록 보류
+        pending = entry_data.get("pending")
+        if pending and time.monotonic() < pending["until"]:
+            dt = dict(data.get("dt") or {})
+            expect = pending.get("expect") or {}
+            matched = True
+            for key, val in expect.items():
+                try:
+                    if int(dt.get(key, -999)) != int(val):
+                        matched = False
+                        break
+                except (TypeError, ValueError):
+                    matched = False
+                    break
+            if matched:
+                entry_data["pending"] = None
+                _LOGGER.debug("Pending control confirmed: %s", expect)
+            else:
+                dt.update({str(k): v for k, v in expect.items()})
+                data = dict(data)
+                data["dt"] = dt
+        elif pending:
+            entry_data["pending"] = None
+
+        return data
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -54,21 +83,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=int(scan)),
     )
 
-    await coordinator.async_config_entry_first_refresh()
-
+    entry_data["coordinator"] = coordinator
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "api": api,
-        "coordinator": coordinator,
-    }
+    hass.data[DOMAIN][entry.entry_id] = entry_data
 
+    await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
@@ -76,5 +101,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
     await hass.config_entries.async_reload(entry.entry_id)
